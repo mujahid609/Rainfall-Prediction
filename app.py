@@ -30,8 +30,30 @@ LOCATIONS = [
 def load_artifacts():
     return joblib.load(MODEL_PATH), joblib.load(SCALER_PATH)
 
-def build_features(values):
-    row = {
+
+def load_feature_options(scaler):
+    """Read categorical options from the fitted scaler schema."""
+    expected = list(getattr(scaler, "feature_names_in_", []))
+    if not expected:
+        raise ValueError("The saved scaler does not contain feature_names_in_.")
+
+    def options_for(prefix, fallback):
+        names = [x[len(prefix) + 1:] for x in expected if x.startswith(prefix + "_")]
+        return list(dict.fromkeys([fallback[0]] + names))
+
+    return (
+        options_for("WindGustDir", WIND_DIRS),
+        options_for("WindDir9am", WIND_DIRS),
+        options_for("WindDir3pm", WIND_DIRS),
+        options_for("Location", LOCATIONS),
+    )
+
+
+def build_features(values, expected_features):
+    # Initialize the exact schema expected by the fitted scaler.
+    row = {feature: 0.0 for feature in expected_features}
+
+    numeric_values = {
         "MinTemp": values["MinTemp"],
         "MaxTemp": values["MaxTemp"],
         "Rainfall": values["Rainfall"],
@@ -44,22 +66,23 @@ def build_features(values):
         "Pressure3pm": values["Pressure3pm"],
         "Temp9am": values["Temp9am"],
         "Temp3pm": values["Temp3pm"],
+        "TempDiff": values["MaxTemp"] - values["MinTemp"],
+        "HumidityDiff": values["Humidity9am"] - values["Humidity3pm"],
     }
-    row["TempDiff"] = row["MaxTemp"] - row["MinTemp"]
-    row["HumidityDiff"] = row["Humidity9am"] - row["Humidity3pm"]
 
-    # Reproduce pandas get_dummies(..., drop_first=True) used during training.
-    for col, categories in {
-        "WindGustDir": WIND_DIRS,
-        "WindDir9am": WIND_DIRS,
-        "WindDir3pm": WIND_DIRS,
-        "Location": LOCATIONS,
-    }.items():
+    for feature, value in numeric_values.items():
+        if feature in row:
+            row[feature] = value
+
+    # Reproduce one-hot encoding using the exact trained feature names.
+    for col in ["WindGustDir", "WindDir9am", "WindDir3pm", "Location"]:
         selected = values[col]
-        for category in categories[1:]:
-            row[f"{col}_{category}"] = int(selected == category)
+        prefix = col + "_"
+        for feature in expected_features:
+            if feature.startswith(prefix):
+                row[feature] = int(selected == feature[len(prefix):])
 
-    return pd.DataFrame([row])
+    return pd.DataFrame([row], columns=expected_features)
 
 def main():
     st.markdown(
@@ -92,6 +115,7 @@ def main():
 
     try:
         model, scaler = load_artifacts()
+        expected_features = list(scaler.feature_names_in_)
         WIND_GUST_DIRS, WIND_9_DIRS, WIND_3_DIRS, LOCATIONS = load_feature_options(scaler)
     except Exception as exc:
         st.error(f"Unable to load the trained model files: {exc}")
@@ -140,7 +164,7 @@ def main():
             "Location": location,
         }
 
-        X = build_features(values)
+        X = build_features(values, expected_features)
 
         try:
             X_scaled = scaler.transform(X)
