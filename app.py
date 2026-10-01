@@ -92,6 +92,7 @@ def main():
 
     try:
         model, scaler = load_artifacts()
+        WIND_GUST_DIRS, WIND_9_DIRS, WIND_3_DIRS, LOCATIONS = load_feature_options(scaler)
     except Exception as exc:
         st.error(f"Unable to load the trained model files: {exc}")
         st.stop()
